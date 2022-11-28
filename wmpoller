@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+'''
+wmpoller    - watermon poller
+'''
+
+# Import standard modules
+import argparse
+import configparser
+import signal
+import sys
+
+# Import third-party modules
+import watermon
+
+# Default configuration file
+DEFAULT_CONFIG_FILE = 'wmpoller.conf'
+
+
+def print_records(records):
+    '''
+    Helper function to print out the hex data of
+    if a returned record
+    '''
+    for record in records:
+        #print('[ %s ]' % (' | '.join(format(x, '02x') for x in record)))
+        print(f"[ {' | '.join(format(x, '02x') for x in record)} ]")
+
+
+def signal_handler(signalnum, frame):
+    '''
+    Helper function to exit cleanly when SIGINT is caught
+    '''
+    del frame
+
+    # Create a list of signale names so we can convert
+    # the incoming signal number to its readable name.
+    # (doing it this way is more portable)
+    signals = dict((k, v) for v, k in reversed(sorted(signal.__dict__.items())) if v.startswith('SIG') and not v.startswith('SIG_'))
+
+    print(f"wmpoller caught signal '{signals[signalnum]}'")
+    sys.exit(1)
+
+
+def load_configuration_file(config_file):
+    '''
+    Read and parse the configuration file
+    configparser expects an INI file so we'll prepend '[DEFAULT]'
+    in order to convince configparser that everything is OK.
+    '''
+    args = {}
+    config = configparser.ConfigParser(interpolation=None)
+    try:
+        with open(config_file, encoding="utf-8") as handle:
+            config.read_string("[DEFAULT]\n" + handle.read())
+            handle.close()
+    except OSError as error:
+        logging.fatal("unable to open '%s': %s", config_file, error)
+        sys.exit(1)
+
+    # Convert the config object into a dictionary
+    for (var, val) in config.items('DEFAULT'):
+        args[var] = val
+
+    return args
+
+
+def parse_arguments():
+    '''
+    Parse the command-line arguments
+    '''
+    # Create the parser object
+    parser = argparse.ArgumentParser(description='Poll/monitor a Chandler Systems, Inc. Smart Valve')
+
+    parser.add_argument(
+        '-a', '--address',
+        dest='address',
+        metavar='MAC',
+        help='Bluetooth Low-Energy (BLE) MAC address of the meter',
+    )
+
+    parser.add_argument(
+        '-c', '--calibration',
+        dest='calibration',
+        help='Calibration value used when calculating usage based on flow rate [default: 1]',
+    )
+
+    parser.add_argument(
+        '-C', '--config',
+        dest='config',
+        default=None,
+        help='Specify an alternate configuration file [default: %(default)s]'
+    )
+
+    parser.add_argument(
+        '-d', '--debug',
+        dest='debug',
+        action='store_true',
+        help='Print debugging messages',
+    )
+
+    parser.add_argument(
+        '-o', '--onetime',
+        dest='onetime',
+        action='store_true',
+        help='Run one time and exit',
+    )
+
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
+    # Determine where the configuration file is
+    if args.config is None:
+        if os.path.isfile('/etc/' + DEFAULT_CONFIG_FILE):
+            args.config = '/etc/' + DEFAULT_CONFIG_FILE
+        elif os.path.isfile('/usr/local/etc/' + DEFAULT_CONFIG_FILE):
+            args.config = '/usr/local/etc/' + DEFAULT_CONFIG_FILE
+        else:
+            logging.fatal('no configuration file found')
+            sys.exit(1)
+
+    # Load our configuration file
+    config = load_configuration_file(args.config)
+
+    # Get our command-line options
+    options = vars(args)
+
+    # There's probably a better way but we need to ensure calibration
+    # and address don't exist if they are set to None.  This is due
+    # to the dictionary merge we're about to do.
+    if options['address'] is None:
+        del options['address']
+    if options['calibration'] is None:
+        del options['calibration']
+
+    # Overlay our command-line options onto the config options
+    config.update(options)
+
+    # Make sure that we have a calibration value
+    if config['calibration'] is None:
+        config['calibration'] = 1
+
+    # Make sure that we have a device address
+    if config['address'] is None:
+        logging.fatal('must supply a device address')
+        sys.exit(1)
+
+    # Return the resulting options
+    return config
+
+
+def main():
+    '''
+    Main processing function
+    '''
+    # Catch SIGINT
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # Parse the command-line arguments
+    options = parse_arguments()
+
+    # Tweak the logging if we're running in debug mode
+    if options['debug'] is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger().handlers[0].setFormatter(logging.Formatter('%(asctime)s: [%(thread)d][%(threadName)s]: %(levelname)s: line %(lineno)s: %(name)s: %(message)s'))
+
+    # Load a dictionary with the database config
+    db_config = {}
+    db_config['database'] = options['db_name']
+    db_config['host'] = options['db_host']
+    db_config['port'] = options['db_port']
+    db_config['user'] = options['db_user']
+    db_config['password'] = options['db_pass']
+
+    # Create the polling object
+    logging.info('Creating poller')
+    try:
+        poller = watermon.Poller(device=options['address'], db_config=db_config, calibration_factor=options['calibration'], onetime=options['onetime'])
+        poller.start()
+    except Exception as error:
+        logging.fatal('Caught %s excption', type(error).__name__)
+        logging.fatal('Unable to create poller: %s', error)
+        raise
+
+
+# Allow other programs to import this as a module
+if __name__ == '__main__':
+    import logging          # pylint: disable=reimported,ungrouped-imports
+    import logging.handlers # pylint: disable=reimported,ungrouped-imports
+    import os               # pylint: disable=reimported,ungrouped-imports
+
+
+    # Establish basic logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(name)s: %(message)s'
+    )
+
+    # Set the logging level names to lower case
+    logging.addLevelName(logging.CRITICAL, 'fatal')
+    logging.addLevelName(logging.ERROR, 'error')
+    logging.addLevelName(logging.WARNING, 'warning')
+    logging.addLevelName(logging.DEBUG, 'debug')
+    logging.addLevelName(logging.INFO, 'info')
+
+    # Create a syslog handler
+    SYSLOG = logging.handlers.SysLogHandler(address='/dev/log')
+    SYSLOG.setFormatter(
+        logging.Formatter(
+            f"{os.path.basename(__file__)}[%(process)d]: %(levelname)s: %(message)s"
+        )
+    )
+    logging.getLogger().addHandler(SYSLOG)
+
+    try:
+        logging.info('Starting')
+        main()
+    except Exception as err:
+        # Handle any previously unhandled exceptions
+        import traceback
+        FRAME = traceback.extract_tb(err.__traceback__, -1)[0]
+        logging.critical('unhandled %s exception in %s(), line %s of %s: %s', type(err).__name__, FRAME.name, FRAME.lineno, FRAME.filename, err)
+        raise
+    finally:
+        # Perform any last minute cleanup
+        #if 'clean_up' in globals():
+        #    clean_up()
+        logging.info('Finished')

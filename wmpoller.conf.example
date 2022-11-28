@@ -1,0 +1,31 @@
+
+# address
+#     Device address of the water softener to poll
+#address = XX:XX:XX:XX:XX:XX
+
+# calibration factor
+#   We attempt to determine the gallons used based on flow rates
+#   read every second.  The reality is that we don't read on every
+#   and thus are sometimes off.  It would be more accurate to read
+#   the flow rate several times per second but the meter is not able
+#   to handle it.  The calibration factor is an attempt to compensate
+#   for this inconsistency so that longer term monitoring eventually
+#   normalizes to a more accurate value.
+#calibration = 1
+
+# db_host
+#     Hostname or IP address of the SQL server
+#db_host = <hostname or ip>
+
+# db_port
+#    TCP port of the SQL server
+#db_port = 5432
+
+# db_name
+#    Name of the SQL database
+#db_name = <database name>
+
+# db_user, db_pass
+#    Credentials to the SQL database
+#db_user = <username>
+#db_pass = <password>
